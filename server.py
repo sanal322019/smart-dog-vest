@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import numpy as np
 from scipy.signal import butter, filtfilt, savgol_filter, find_peaks
 from collections import deque
-import os   # ✅ Added
+import os
 
 app = Flask(__name__)
 
@@ -24,16 +24,14 @@ valley_count = 0
 counted = set()
 latest_map = "N/A"
 
-# -------- FILTER --------
 def lowpass(data, cutoff=2, fs=20, order=2):
     nyq = 0.5 * fs
     b, a = butter(order, cutoff/nyq, btype='low')
     return filtfilt(b, a, data)
 
-# -------- ESP DATA RECEIVE --------
+# ---------- RECEIVE DATA ----------
 @app.route("/upload", methods=["POST"])
 def upload():
-
     global wave_count, prev_above, sample_count
     global valley_count, counted, latest_map
 
@@ -57,7 +55,6 @@ def upload():
 
     # ---- STRETCH PROCESS ----
     if len(stretch_data) >= SG_WINDOW:
-
         raw = np.array(stretch_data)
         filt = savgol_filter(lowpass(raw), SG_WINDOW, SG_POLYORDER)
 
@@ -73,49 +70,84 @@ def upload():
                 if depth >= 70:
                     valid.append(v)
 
-        abs_i = [
-            sample_count - (MAX_POINTS - 1 - v)
-            for v in valid
-        ]
+        abs_i = [sample_count - (MAX_POINTS-1-v) for v in valid]
 
         if sample_count >= MAX_POINTS:
             for i in abs_i:
-                if not any(abs(i - c) <= SAMPLE_TOLERANCE for c in counted):
+                if not any(abs(i-c)<=SAMPLE_TOLERANCE for c in counted):
                     valley_count += 1
                     counted.add(i)
 
     return jsonify({"status": "ok"})
 
-# -------- API FOR WEBSITE --------
+# -------- API --------
 @app.route("/data")
 def data():
     return jsonify({
         "roll_count": wave_count,
         "valley_count": valley_count,
-        "map": latest_map
+        "map": latest_map,
+        "roll_wave": list(roll_data),
+        "stretch_wave": list(stretch_data)
     })
 
 # -------- WEBSITE --------
 @app.route("/")
 def home():
     return """
-    <h1>🐶 Smart Dog Vest</h1>
-    <h2>Roll Count: <span id=r>0</span></h2>
-    <h2>Valley Count: <span id=v>0</span></h2>
-    <a id=m target=_blank>Open Map</a>
+<!DOCTYPE html>
+<html>
+<head>
+<title>Smart Dog Vest</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
 
-    <script>
-    setInterval(()=>{
-      fetch('/data').then(r=>r.json()).then(d=>{
-        r.innerText=d.roll_count
-        v.innerText=d.valley_count
-        m.href=d.map
-      })
-    },1000)
-    </script>
-    """
+<body style="background:#0f172a;color:white;text-align:center">
 
-# -------- IMPORTANT CLOUD FIX --------
+<h1>🐶 Smart Dog Vest</h1>
+<h2>Roll Count: <span id="r">0</span></h2>
+<h2>Valley Count: <span id="v">0</span></h2>
+<a id="m" target="_blank" style="color:#38bdf8">Open Map</a>
+
+<canvas id="rollChart"></canvas>
+<canvas id="stretchChart"></canvas>
+
+<script>
+const rC = document.getElementById('rollChart')
+const sC = document.getElementById('stretchChart')
+
+const rollChart = new Chart(rC,{
+ type:'line',
+ data:{labels:[],datasets:[{label:'Roll',data:[]}]}
+})
+
+const stretchChart = new Chart(sC,{
+ type:'line',
+ data:{labels:[],datasets:[{label:'Stretch',data:[]}]}
+})
+
+setInterval(()=>{
+ fetch('/data')
+ .then(r=>r.json())
+ .then(d=>{
+  document.getElementById('r').innerText=d.roll_count
+  document.getElementById('v').innerText=d.valley_count
+  document.getElementById('m').href=d.map
+
+  rollChart.data.labels=d.roll_wave.map((_,i)=>i)
+  rollChart.data.datasets[0].data=d.roll_wave
+  rollChart.update()
+
+  stretchChart.data.labels=d.stretch_wave.map((_,i)=>i)
+  stretchChart.data.datasets[0].data=d.stretch_wave
+  stretchChart.update()
+ })
+},1000)
+</script>
+</body>
+</html>
+"""
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # ✅ Render port
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT",5000))
+    app.run(host="0.0.0.0",port=port)
